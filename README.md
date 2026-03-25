@@ -1,76 +1,61 @@
-The [FreeRTOS 202411.00](https://github.com/FreeRTOS/FreeRTOS/tree/202411.00) release updates FreeRTOS Kernel, FreeRTOS+TCP, coreMQTT, corePKCS11, coreHTTP, coreJSON, AWS IoT Over-the-air-Updates (OTA), AWS IoT Device Shadow, AWS IoT Jobs, AWS IoT Device Defender, Backoff Algorithm, AWS IoT Fleet Provisioning, coreSNTP, SigV4, and FreeRTOS Cellular Interface libraries to their [202406-LTS](https://github.com/FreeRTOS/FreeRTOS-LTS/blob/202406-LTS/CHANGELOG.md) versions. It also updates coreMQTT Agent to v1.3.0 and MbedTLS to v3.5.1. This release also adds ARMv7-R No_GIC Port Demo, ARMv7-R MPU Port Demos and FreeRTOS_Plus_TCP_IPv6_Demo Windows Simulator Demo. Additionally, all WinSim Demos are updated to use TLSv1.3. This release also updates WolfSSL to version v5.6.4.
+# 🕒 FreeRTOS Precise Timeline Scheduler
 
-The [FreeRTOS 202212.00](https://github.com/FreeRTOS/FreeRTOS/tree/202212.00) release updates FreeRTOS Kernel, FreeRTOS+TCP, coreMQTT, corePKCS11, coreHTTP, coreJSON, AWS IoT Over-the-air-Updates (OTA), AWS IoT Device Shadow, AWS IoT Jobs, AWS IoT Device Defender, Backoff Algorithm, AWS IoT Fleet Provisioning, coreSNTP, SigV4, and FreeRTOS Cellular Interface libraries to their [LTS 2.0](https://github.com/FreeRTOS/FreeRTOS-LTS/blob/202210-LTS/CHANGELOG.md) versions. It also updates coreMQTT Agent to v1.2.0 to be compatible with coreMQTT v2.X.X, and updates MbedTLS to v3.2.1. This release also adds Visual Studio static library projects for the FreeRTOS Kernel, FreeRTOS+TCP, Logging, MbedTLS, coreHTTP, and corePKCS11. With the addition of the static library projects, all Visual Studio projects have been updated to use them. Additionally, all demos dependent on coreMQTT have been updated to work with coreMQTT v2.X.X.
+## 🧭 Overview
+This project implements a deterministic, timeline-driven scheduler for FreeRTOS, replacing the standard priority-based preemptive model with a strict **Time-Triggered Architecture (TTA)**. 
 
-## Getting started
-The [FreeRTOS.org](https://www.freertos.org) website contains a [FreeRTOS Kernel Quick Start Guide](https://www.freertos.org/Documentation/01-FreeRTOS-quick-start/01-Beginners-guide/02-Quick-start-guide), a [list of supported devices and compilers](https://www.freertos.org/RTOS_ports.html), the [API reference](https://www.freertos.org/Documentation/02-Kernel/04-API-references/01-Task-creation/00-TaskHandle), and many other resources.
+Designed for precise real-time environments, this scheduler enforces task execution based on a mathematically rigorous Major and Sub-frame structure. It ensures that Hard Real-Time (HRT) tasks execute within guaranteed, isolated time windows, while Soft Real-Time (SRT) tasks utilize the remaining idle CPU cycles.
 
-### Getting help
-You can use your Github login to get support from both the FreeRTOS community and directly from the primary FreeRTOS developers on our [active support forum](https://forums.freertos.org).  The [FAQ](https://www.freertos.org/Why-FreeRTOS/FAQs) provides another support resource.
+## ⚙️ Key Features
+* **Deterministic Major/Sub-Frame Structure:** The global timeline is divided into a 100-tick Major Frame containing ten 10-tick Sub-frames, ensuring 100% predictable and repeatable execution.
+* **Temporal Isolation:** Hard Real-Time (HRT) tasks are strictly assigned to specific sub-frames with explicit start times and deadlines. 
+* **Hard Deadline Enforcement (The "Kill Switch"):** The Master Dispatcher monitors HRT task execution. If a task exceeds its assigned window, the Dispatcher forcefully terminates it (`vTaskDelete`) to protect the timeline.
+* **Soft Real-Time (SRT) Yielding:** SRT tasks operate at a lower priority, safely running during the idle gaps left by HRT tasks without risking preemption of critical operations.
+* **Dynamic Reinitialization:** At the end of every Major Frame, the system state is entirely reset, and all tasks are re-created to prevent long-term state drift.
 
-## Cloning this repository
-This repo uses [Git Submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) to bring in dependent components.
+## 🏗️ System Architecture & Modified Files
+This project modifies the standard FreeRTOS Cortex-M3 (MPS2/QEMU) port. The following core files drive the timeline logic:
 
-**Note:** If you download the ZIP file provided by the GitHub UI, you will not get the contents of the submodules. (The ZIP file is also not a valid git repository)
+* **`timeline_scheduler.c` / `.h` (The Custom Kernel):** Contains the high-priority Master Dispatcher (`vMasterDispatcherTask`) and the `vConfigureScheduler()` API. It calculates the modulo math for the current sub-frame, manages MPU privilege elevation, dynamically resumes HRT tasks at their exact start ticks, and acts as the system watchdog for deadline violations.
+* **`app_main.c` (The Application Space):** Defines the worker tasks (`Task_A`, `Task_B`, `Task_C`) as single-shot functions that execute and self-terminate. It also houses the `TimelineTaskConfig_t` matrix, which maps out the temporal isolation and assigns tasks to their specific time slots.
+* **`FreeRTOSConfig.h` (System Settings):** The OS memory pool (`configTOTAL_HEAP_SIZE`) was explicitly tuned to 24KB to accommodate the larger 1024-word stacks required for safe `printf` execution within the MPU boundaries, preventing starvation without overflowing the simulated board's RAM.
+* **`Makefile` (Build Automation):** Updated to compile the custom scheduler logic, retain emergency hardware fault handlers (`vHandleMemoryFault`), and includes a custom `make run` target for seamless QEMU deployment.
 
-If using Windows, because this repository and its submodules contain symbolic links, set `core.symlinks` to true with the following command:
+## 🛠️ Configuration Interface
+The schedule is defined at compile-time using the custom `TimelineTaskConfig_t` structure. This matrix is passed directly into the OS initialization:
+
+```c
+TimelineTaskConfig_t my_tasks[] = {
+    {
+        .task_name = "Task_A",
+        .function = Task_A,
+        .type = HARD_RT,
+        .ulSubframe_id = 0,   /* Sub-frame 0 */
+        .ulStart_time = 2,    /* Start at local tick 2 */
+        .ulEnd_time = 8       /* Deadline at local tick 8 */
+    },
+    // Additional tasks follow...
+}
 ```
-git config --global core.symlinks true
-```
-In addition to this, either enable [Developer Mode](https://docs.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development) or, whenever using a git command that writes to the system (e.g. `git pull`, `git clone`, and `git submodule update --init --recursive`), use a console elevated as administrator so that git can properly create symbolic links for this repository. Otherwise, symbolic links will be written as normal files with the symbolic links' paths in them as text. [This](https://blogs.windows.com/windowsdeveloper/2016/12/02/symlinks-windows-10/) gives more explanation.
 
-To clone using HTTPS:
-```
-git clone https://github.com/FreeRTOS/FreeRTOS.git --recurse-submodules
-```
-Using SSH:
-```
-git clone git@github.com:FreeRTOS/FreeRTOS.git --recurse-submodules
-```
+## 🚀 Building and Running
+This project requires an ARM cross-compiler (`arm-none-eabi-gcc`) and the QEMU emulator.
 
-If you have downloaded the repo without using the `--recurse-submodules` argument, you need to run:
-```
-git submodule update --init --recursive
-```
+1. **Clean previous builds:**
+   ```bash
+   make clean
+   ```
+2. **Compile and launch the emulator:**
+   ```bash
+   make run
+   ```
 
-## Repository structure
-This repository contains the FreeRTOS Kernel, a number of supplementary libraries including the LTS ones, and a comprehensive set of example projects.  Many libraries (including the FreeRTOS kernel) are included as Git submodules from their own Git repositories.
+## Expected Output
+Upon launching, the terminal will display a sequential, scaled-down timeline (100ms per tick for human readability). You will observe:
 
-### Kernel source code and example projects
-```FreeRTOS/Source``` contains the FreeRTOS kernel source code (submoduled from https://github.com/FreeRTOS/FreeRTOS-Kernel).
+   * The passage of time represented by tick markers ([1].[2].).
 
-```FreeRTOS/Demo``` contains pre-configured example projects that demonstrate the FreeRTOS kernel executing on different hardware platforms and using different compilers.
+   * HRT tasks dispatching at precise ticks (e.g., [102] DISPATCHER: Starting Task_A).
 
-### Supplementary library source code and example projects
-```FreeRTOS-Plus/Source``` contains source code for additional FreeRTOS component libraries, as well as select partner provided libraries. These subdirectories contain further readme files and links to documentation.
+   * Tasks successfully self-terminating.
 
-```FreeRTOS-Plus/Demo``` contains pre-configured example projects that demonstrate the FreeRTOS kernel used with the additional FreeRTOS component libraries.
-
-## Previous releases
-[Releases](https://github.com/FreeRTOS/FreeRTOS/releases) contains older FreeRTOS releases.
-
-
-## Learning FreeRTOS
-
-For detailed and up-to-date information about FreeRTOS, including getting started guides and documentation for both new and experienced users, please refer to the official FreeRTOS website:
-https://www.freertos.org/
-
-## FreeRTOS Lab Projects
-FreeRTOS Lab projects are libraries and demos that are fully functional, but may be experimental or undergoing optimizations and refactorization to improve memory usage, modularity, documentation, demo usability, or test coverage.
-
-Most FreeRTOS Lab libraries can be found in the [FreeRTOS-Labs repository](https://github.com/FreeRTOS/FreeRTOS-Labs).
-
-A number of FreeRTOS Lab Demos can be found in the [FreeRTOS Github Organization](https://github.com/FreeRTOS) by searching for "Lab" or following [this link](https://github.com/FreeRTOS?q=Lab&type=&language=) to the search results.
-
-## coreMQTT Agent Demos
-The [FreeRTOS/coreMQTT-Agent-Demos](https://github.com/FreeRTOS/coreMQTT-Agent-Demos) repository contains demos to showcase use of the [coreMQTT-Agent](https://github.com/FreeRTOS/coreMQTT-Agent) library to share an MQTT connection between multiple application tasks.
-
-The demos show a single MQTT connection usage between multiple application tasks for interacting with AWS services (including [Over-the-air-Updates](https://docs.aws.amazon.com/freertos/latest/userguide/freertos-ota-dev.html), [Device Shadow](https://docs.aws.amazon.com/iot/latest/developerguide/iot-device-shadows.html),
- [Device Defender](https://docs.aws.amazon.com/iot/latest/developerguide/device-defender.html)) alongside performing simple Publish-Subscribe operations.
-## CBMC
-
-The `FreeRTOS/Test/CBMC/proofs` directory contains CBMC proofs.
-
-To learn more about CBMC and proofs specifically, review the training material [here](https://model-checking.github.io/cbmc-training).
-
-In order to run these proofs you will need to install CBMC and other tools by following the instructions [here](https://model-checking.github.io/cbmc-training/installation.html).
+   * Acomplete system reset every 100 ticks (>>> MAJOR FRAME RESET <<<).

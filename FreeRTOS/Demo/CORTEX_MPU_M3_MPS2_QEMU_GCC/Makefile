@@ -29,6 +29,7 @@ SOURCE_FILES          +=    $(KERNEL_DIR)/stream_buffer.c
 # application source files
 SOURCE_FILES          +=    app_main.c
 SOURCE_FILES          +=    mpu_demo.c
+SOURCE_FILES          +=    timeline_scheduler.c
 
 INCLUDE_DIRS          +=    -I$(FREERTOS_DIR)/Demo/CORTEX_MPU_M3_MPS2_QEMU_GCC
 INCLUDE_DIRS          +=    -I$(FREERTOS_DIR)/Demo/CORTEX_MPU_M3_MPS2_QEMU_GCC/CMSIS
@@ -80,6 +81,10 @@ ${BUILD_DIR}/%.o : %.c Makefile
 	-mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -MMD -c $< -o $@
 
+# Custom shortcut to build and launch the emulator
+run: $(BUILD_DIR)/$(BIN)
+	qemu-system-arm -machine mps2-an385 -cpu cortex-m3 -nographic -kernel $(BUILD_DIR)/$(BIN)
+	
 clean:
 	-rm -rf build
 

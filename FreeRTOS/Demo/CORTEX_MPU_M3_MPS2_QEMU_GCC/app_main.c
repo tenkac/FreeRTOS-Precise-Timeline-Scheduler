@@ -29,27 +29,96 @@
 
 /* App includes. */
 #include "app_main.h"
-
-/* Demo includes. */
-#include "mpu_demo.h"
-
 #include <stdio.h>
+
+#include "timeline_scheduler.h"
+
+/* 1. Define two simple worker tasks */
+void Task_A(void *pvParameters) {
+    TimelineTaskConfig_t *my_cfg = (TimelineTaskConfig_t *)pvParameters;
+
+    printf("      -> [Task A] Working...\r\n");
+    
+    /* Simulate a short task */
+    for(volatile int i=0; i<100000; i++); 
+
+    printf("      -> [Task A] Done. Self-Terminating.\r\n");
+    
+    /* Tell dispatcher we are finished safely */
+    my_cfg->is_running = 0;
+    vTaskDelete(NULL); 
+}
+
+void Task_B(void *pvParameters) {
+    while(1) {
+        printf("      -> [Task B] Executing Soft Real-Time work during idle time...\r\n");
+        
+        /* Soft RT work */
+        volatile uint32_t delay = 0;
+        for(delay = 0; delay < 50000; delay++); 
+
+        /* Wait for the next major frame */
+        vTaskSuspend(NULL); 
+    }
+}
+/* 1. Define Task C (New HRT task) */
+void Task_C(void *pvParameters) {
+    TimelineTaskConfig_t *my_cfg = (TimelineTaskConfig_t *)pvParameters;
+    printf("      -> [Task C] Running in a later sub-frame!\r\n");
+    my_cfg->is_running = 0;
+    vTaskDelete(NULL); 
+}
+/* 2. Create your task configuration array */
+TimelineTaskConfig_t my_tasks[] = {
+    {
+        .task_name = "Task_A",
+        .function = Task_A,
+        .type = HARD_RT,
+        .ulSubframe_id = 0,   /* Sub-frame 0 (Ticks 0-9) */
+        .ulStart_time = 2,    /* Start at the 2nd tick */
+        .ulEnd_time = 8       /* Deadline at the 8th tick */
+    },
+    {
+        .task_name = "Task_C",
+        .function = Task_C,
+        .type = HARD_RT,
+        .ulSubframe_id = 4,   /* Sub-frame 4 (Ticks 40-49) */
+        .ulStart_time = 5,    /* Start at tick 5 of that sub-frame (Tick 45 total) */
+        .ulEnd_time = 9
+    },
+    {
+        .task_name = "Task_B",
+        .function = Task_B,
+        .type = SOFT_RT,
+        /* SRT tasks just need the type; dispatcher handles the rest */
+    }
+};
+
+/* 3. Create the global timeline configuration */
+TimelineConfig_t my_timeline_config = {
+    .major_frame_ticks = 100,
+    .sub_frame_ticks = 10,
+    .num_subframes = 10,
+    .tasks = my_tasks,
+    .num_tasks = 3  /* Don't forget to update this to 3! */
+};
 
 void app_main( void )
 {
-    /* Start the MPU demo. */
-    vStartMPUDemo();
+    printf( "\r\n--- FreeRTOS Timeline Scheduler Starting ---\r\n" );
 
-    /* Start the scheduler. */
+    /* Call your custom scheduler setup! */
+    vConfigureScheduler(&my_timeline_config);
+
+    /* Hand control over to the RTOS. */
     vTaskStartScheduler();
 
     printf( "Returned from vTaskStartScheduler something bad had happened\n" );
-
-    /* Should not get here. */
-    for( ; ; )
-    {
-    }
+    for( ; ; ) {}
 }
+/*-----------------------------------------------------------*/
+/* KEEP ALL OF THE HOOKS EXACTLY AS THEY ARE BELOW THIS LINE */
+/* vApplicationStackOverflowHook, vApplicationMallocFailedHook, etc... */
 /*-----------------------------------------------------------*/
 
 void vApplicationStackOverflowHook( TaskHandle_t pxTask,

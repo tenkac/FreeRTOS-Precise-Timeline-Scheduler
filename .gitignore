@@ -24,7 +24,12 @@ CWSettingsWindows.stg
 *.elf
 *.out
 *.rom
-
+*.o
+*.d
+*.axf
+*.map
+.vscode/
+access_token.txt 
 # MS Word Files
 *.doc
 *.docx

@@ -25,6 +25,7 @@ void vPrintTraceSummary(void) {
             system_trace[i].event_type);
     }
     printf("-------------------------------\r\n");
+    trace_index = 0;
 }
 
 void vConfigureScheduler(TimelineConfig_t *cfg) {
@@ -144,6 +145,7 @@ void vMasterDispatcherTask(void *pvParameters) {
         if (time_in_major == 0)
         {
             printf("\r\n>>> MAJOR FRAME RESET (Tick %lu) <<<\r\n", current_tick);
+            vPrintTraceSummary();
             vLogTraceEvent("SYSTEM", TRACE_FRAME_RESET);
             for (uint32_t i = 0; i < cfg->num_tasks; i++)
             {

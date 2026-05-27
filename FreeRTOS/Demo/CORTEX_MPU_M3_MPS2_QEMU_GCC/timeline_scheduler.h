@@ -48,6 +48,7 @@ typedef struct {
 
 void vLogTraceEvent(const char* task_name, TraceEventType_t event);
 void vPrintTraceSummary(void);
+uint8_t validate_no_overlaps(TimelineConfig_t *cfg);
 
 /* API Functions */
 void vConfigureScheduler(TimelineConfig_t *cfg);

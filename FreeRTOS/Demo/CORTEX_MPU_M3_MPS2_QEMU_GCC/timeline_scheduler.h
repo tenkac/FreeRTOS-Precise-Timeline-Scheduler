@@ -33,6 +33,22 @@ typedef struct {
     uint32_t num_tasks;
 } TimelineConfig_t;
 
+typedef enum { 
+    TRACE_TASK_START, 
+    TRACE_TASK_END, 
+    TRACE_DEADLINE_MISS,
+    TRACE_FRAME_RESET
+} TraceEventType_t;
+
+typedef struct {
+    TickType_t tick;
+    const char* task_name;
+    TraceEventType_t event_type;
+} TraceLog_t;
+
+void vLogTraceEvent(const char* task_name, TraceEventType_t event);
+void vPrintTraceSummary(void);
+
 /* API Functions */
 void vConfigureScheduler(TimelineConfig_t *cfg);
 void vMasterDispatcherTask(void *pvParameters);

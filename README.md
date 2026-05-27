@@ -1,27 +1,43 @@
-# 🕒 FreeRTOS Precise Timeline Scheduler
+# 🕒 Precise Timeline Scheduler for FreeRTOS
+
+A deterministic, timeline-driven scheduling architecture built on top of FreeRTOS. This project replaces the default dynamic priority-based model with a strict, time-triggered paradigm, ensuring highly predictable and repeatable real-time execution.
 
 ## 🧭 Overview
-This project implements a deterministic, timeline-driven scheduler for FreeRTOS, replacing the standard priority-based preemptive model with a strict **Time-Triggered Architecture (TTA)**. 
 
-Designed for precise real-time environments, this scheduler enforces task execution based on a mathematically rigorous Major and Sub-frame structure. It ensures that Hard Real-Time (HRT) tasks execute within guaranteed, isolated time windows, while Soft Real-Time (SRT) tasks utilize the remaining idle CPU cycles.
+In mission-critical embedded systems, knowing *exactly* when a task will run is often more important than running it as fast as possible. This project introduces a Master Dispatcher that enforces a rigid timeline divided into a **Major Frame** and smaller **Sub-frames**. 
 
-## ⚙️ Key Features
-* **Deterministic Major/Sub-Frame Structure:** The global timeline is divided into a 100-tick Major Frame containing ten 10-tick Sub-frames, ensuring 100% predictable and repeatable execution.
-* **Temporal Isolation:** Hard Real-Time (HRT) tasks are strictly assigned to specific sub-frames with explicit start times and deadlines. 
-* **Hard Deadline Enforcement (The "Kill Switch"):** The Master Dispatcher monitors HRT task execution. If a task exceeds its assigned window, the Dispatcher forcefully terminates it (`vTaskDelete`) to protect the timeline.
-* **Soft Real-Time (SRT) Yielding:** SRT tasks operate at a lower priority, safely running during the idle gaps left by HRT tasks without risking preemption of critical operations.
-* **Dynamic Reinitialization:** At the end of every Major Frame, the system state is entirely reset, and all tasks are re-created to prevent long-term state drift.
+Tasks are spawned and terminated at exact millisecond boundaries defined by a static configuration. If a task violates its timing constraints, the scheduler ruthlessly enforces the deadline to protect system stability.
 
-## 🏗️ System Architecture & Modified Files
-This project modifies the standard FreeRTOS Cortex-M3 (MPS2/QEMU) port. The following core files drive the timeline logic:
+## ✨ Key Features
 
-* **`timeline_scheduler.c` / `.h` (The Custom Kernel):** Contains the high-priority Master Dispatcher (`vMasterDispatcherTask`) and the `vConfigureScheduler()` API. It calculates the modulo math for the current sub-frame, manages MPU privilege elevation, dynamically resumes HRT tasks at their exact start ticks, and acts as the system watchdog for deadline violations.
-* **`app_main.c` (The Application Space):** Defines the worker tasks (`Task_A`, `Task_B`, `Task_C`) as single-shot functions that execute and self-terminate. It also houses the `TimelineTaskConfig_t` matrix, which maps out the temporal isolation and assigns tasks to their specific time slots.
-* **`FreeRTOSConfig.h` (System Settings):** The OS memory pool (`configTOTAL_HEAP_SIZE`) was explicitly tuned to 24KB to accommodate the larger 1024-word stacks required for safe `printf` execution within the MPU boundaries, preventing starvation without overflowing the simulated board's RAM.
-* **`Makefile` (Build Automation):** Updated to compile the custom scheduler logic, retain emergency hardware fault handlers (`vHandleMemoryFault`), and includes a custom `make run` target for seamless QEMU deployment.
+* **Strict Determinism:** Zero timing drift. Tasks execute at precise tick markers, repeatable across tens of thousands of frames.
+* **Master Dispatcher:** A high-priority central controller that handles task creation, resumption, and termination without modifying the underlying FreeRTOS kernel.
+* **Memory Safe Resets:** Flawless Major Frame resetting logic that destroys and recreates the environment without heap exhaustion or dangling pointers.
+* **Thread Safety:** Implements FreeRTOS critical sections to protect shared task-state variables from race conditions.
+* **Automated Static Testing:** Pre-flight configuration validation that catches mathematical errors and illegal task overlaps before the OS boots.
+* **High-Speed Trace Module:** A "flight data recorder" that logs execution events to memory with zero performance penalty, printing a structured post-mortem summary at the end of each frame.
 
-## 🛠️ Configuration Interface
-The schedule is defined at compile-time using the custom `TimelineTaskConfig_t` structure. This matrix is passed directly into the OS initialization:
+---
+
+## ⚙️ Architecture & Task Model
+
+The scheduler is governed by a `TimelineConfig_t` structure that defines the Major Frame (e.g., 100 ms) and its Sub-frames (e.g., 10 frames of 10 ms). Tasks are strictly categorized into two types:
+
+### 🧱 Hard Real-Time (HRT) Tasks
+* **Strict Timing:** Assigned a specific start time and deadline within a specific sub-frame.
+* **Non-preemptive Execution:** Runs to completion within its designated slot.
+* **Deadline Enforcement:** If an HRT task fails to self-terminate by its deadline tick, the Dispatcher kills it instantly and logs a `TRACE_DEADLINE_MISS`.
+
+### 🌿 Soft Real-Time (SRT) Tasks
+* **Background Execution:** Spawns at the beginning of the Major Frame and runs *only* during the idle CPU time left behind by HRT tasks.
+* **Preemptible:** Naturally preempted by HRT tasks using FreeRTOS priority management.
+* **No Guarantees:** SRT tasks are not guaranteed to finish within a single frame and do not trigger deadline violations.
+
+---
+
+## 🛠️ Configuration Example
+
+The entire timeline is defined statically at compile time.
 
 ```c
 TimelineTaskConfig_t my_tasks[] = {
@@ -30,32 +46,69 @@ TimelineTaskConfig_t my_tasks[] = {
         .function = Task_A,
         .type = HARD_RT,
         .ulSubframe_id = 0,   /* Sub-frame 0 */
-        .ulStart_time = 2,    /* Start at local tick 2 */
-        .ulEnd_time = 8       /* Deadline at local tick 8 */
+        .ulStart_time = 2,    /* Starts at Tick 2 */
+        .ulEnd_time = 8       /* Deadline at Tick 8 */
     },
-    // Additional tasks follow...
-}
+    {
+        .task_name = "Task_B",
+        .function = Task_B,
+        .type = SOFT_RT,      /* SRT fills idle time */
+    }
+};
+
+TimelineConfig_t my_timeline_config = {
+    .major_frame_ticks = 100,
+    .sub_frame_ticks = 10,
+    .num_subframes = 10,
+    .tasks = my_tasks,
+    .num_tasks = 2
+};
 ```
 
-## 🚀 Building and Running
-This project requires an ARM cross-compiler (`arm-none-eabi-gcc`) and the QEMU emulator.
+---
 
-1. **Clean previous builds:**
+## 📊 Trace Module (The Flight Recorder)
+
+To prove determinism without causing "Heisenbugs" (timing issues caused by slow `printf` calls), the scheduler utilizes a high-speed memory trace array. 
+
+Events (`TRACE_TASK_START`, `TRACE_DEADLINE_MISS`, `TRACE_FRAME_RESET`) are written to memory instantly. At the exact boundary of the Major Frame reset, the Dispatcher dumps the deferred log to the console:
+
+```text
+>>> MAJOR FRAME RESET (Tick 100) <<<
+
+--- SCHEDULER TRACE SUMMARY ---
+Tick: 2 | Task: Task_A | Event: 0 (START)
+Tick: 45 | Task: Task_C | Event: 0 (START)
+Tick: 100 | Task: SYSTEM | Event: 3 (RESET)
+-------------------------------
+```
+
+---
+
+## 🚀 Building and Running
+
+This project is built to run on the **QEMU Cortex-M3 (MPS2)** emulator.
+
+1. **Clean the build directory:**
    ```bash
    make clean
    ```
-2. **Compile and launch the emulator:**
+2. **Compile the OS:**
+   ```bash
+   make
+   ```
+3. **Launch the Emulator:**
    ```bash
    make run
    ```
 
-## Expected Output
-Upon launching, the terminal will display a sequential, scaled-down timeline (100ms per tick for human readability). You will observe:
+*Note: To exit QEMU without closing your terminal, press `Ctrl-A` followed by `X`.*
 
-   * The passage of time represented by tick markers ([1].[2].).
+---
 
-   * HRT tasks dispatching at precise ticks (e.g., [102] DISPATCHER: Starting Task_A).
+## 🧪 Automated Testing
 
-   * Tasks successfully self-terminating.
-
-   * Acomplete system reset every 100 ticks (>>> MAJOR FRAME RESET <<<).
+The system includes a pre-flight automated test suite that runs immediately before `vConfigureScheduler()`. It verifies:
+1. **Invalid Config Math:** Ensures `(sub_frames * sub_frame_ticks) == major_frame_ticks`.
+2. **Overlapping HRT Tasks:** Iterates through the task array to ensure no two HRT tasks occupy the exact same time window, preventing priority inversions.
+3. **Trace Validations:** Post-boot trace analysis verifies deadline enforcements and major frame resets.
